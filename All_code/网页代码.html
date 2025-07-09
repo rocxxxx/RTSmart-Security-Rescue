@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>K230 - AI事件实时监控与控制</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+    <style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        background:
+            linear-gradient(rgba(10, 25, 50, 0.6), rgba(10, 25, 50, 0.6)),
+            url('https://i-blog.csdnimg.cn/blog_migrate/3c91527f678ce3658ea505f41356ea71.png') no-repeat center center fixed;
+        background-size: cover;
+        color: #eee;
+        min-height: 100vh;
+    }
+    .status-card:hover, .sensor-card:hover, .log-card:hover {
+        transform: scale(1.02);
+        box-shadow: 0 0 25px rgba(255, 255, 255, 0.15);
+    }
+    .log-empty {
+        height: 100%; display: flex; justify-content: center; align-items: center;
+    }
+    #face-log-list::-webkit-scrollbar,
+    #record-log-list::-webkit-scrollbar,
+    #message-log::-webkit-scrollbar {
+        width: 6px;
+    }
+    #face-log-list::-webkit-scrollbar-thumb,
+    #record-log-list::-webkit-scrollbar-thumb,
+    #message-log::-webkit-scrollbar-thumb {
+        background-color: rgba(255,255,255,0.3);
+        border-radius: 3px;
+    }
+    </style>
+</head>
+<body class="text-white p-4 flex flex-col items-center">
+    <div class="w-full max-w-7xl">
+        <header class="text-center mb-4">
+            <h1 class="text-3xl font-bold text-cyan-400">K230 实时AI事件监控与控制</h1>
+            <p id="connection-status" class="mt-1 text-sm text-yellow-400">正在连接服务器...</p>
+            <div class="mt-2 flex justify-center items-center gap-4">
+                <p id="device-mode-status" class="text-sm text-gray-300">当前设备模式: <span class="font-bold">访客模式</span></p>
+                <button id="mode-switch-btn" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1 rounded-lg shadow-md transition-all duration-200">
+                    进入注册模式
+                </button>
+            </div>
+        </header>
+
+        <div id="status-card" class="status-card bg-gray-800 rounded-xl shadow-xl p-4 mb-10 text-sm flex flex-col justify-center items-center h-36">
+            <h2 class="text-base font-semibold text-gray-400 mb-1 self-start">当前AI状态</h2>
+            <p id="current-status-text" class="text-2xl font-bold text-gray-200 text-center">- 等待数据 -</p>
+            <p id="last-update" class="text-xs text-gray-500 self-end mt-1">最后更新: N/A</p>
+        </div>
+
+        <div class="flex flex-col md:flex-row gap-3 mb-10">
+            <!-- 温湿度卡片 -->
+            <div class="sensor-card flex-1 bg-gradient-to-br from-blue-500 to-green-500 rounded-xl p-3 flex flex-col justify-center items-center h-36 text-sm">
+                <h2 class="font-semibold self-start mb-1 w-full">🌳 环境温湿度</h2>
+                <div class="text-center">
+                    <div class="text-3xl">🌡️💧</div>
+                    <p class="mt-1">温度: <span id="temp-value">--</span> °C</p>
+                    <p class="mt-1">湿度: <span id="humi-value">--</span> %RH</p>
+                </div>
+                <p id="sensor-update" class="text-xs self-end mt-auto w-full text-right">最后更新: N/A</p>
+            </div>
+            <!-- 出入人员记录卡片 -->
+            <div class="log-card flex-1 bg-gradient-to-br from-purple-600 via-pink-600 to-red-600 rounded-xl p-3 flex flex-col h-36 text-sm relative">
+                <h2 class="font-semibold mb-1">👤 出入人员记录</h2>
+                <div id="face-log-list" class="space-y-1 max-h-24 overflow-y-auto pr-1 text-xs">
+                    <div class="log-empty text-gray-300 select-none">暂无记录</div>
+                </div>
+                <p id="face-update" class="text-xs self-end mt-auto w-full text-right">最后更新: N/A</p>
+            </div>
+            <!-- 录音留言记录卡片 -->
+            <div class="log-card flex-1 bg-gradient-to-br from-yellow-600 via-amber-600 to-orange-600 rounded-xl p-3 flex flex-col justify-center h-36 text-sm relative">
+                <h2 class="font-semibold mb-1">📻 录音留言记录</h2>
+                <div id="record-log-list" class="space-y-1 max-h-24 overflow-y-auto pr-1 text-xs">
+                    <div class="log-empty text-gray-300 select-none">暂无记录</div>
+                </div>
+                <p id="record-update" class="text-xs self-end mt-auto w-full text-right">最后更新: N/A</p>
+            </div>
+        </div>
+
+        <footer class="log-card rounded-xl p-4 w-full text-sm bg-[#1e1b3a] border border-blue-500/40 shadow-[0_0_15px_rgba(59,130,246,0.4)]">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="font-semibold text-base">历史事件日志</h3>
+                <div class="flex items-center gap-3">
+                    <button id="location-switch-btn" class="bg-gray-600 hover:bg-gray-700 text-white text-sm px-3 py-1 rounded-lg shadow-md transition-all duration-200">
+                        地点一
+                    </button>
+                    <button id="dispatch-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-3 py-1 rounded-lg shadow-md transition-all duration-200">
+                        出动小车
+                    </button>
+                </div>
+            </div>
+            <div id="message-log" class="space-y-2 h-48 overflow-y-auto pr-1 text-xs">
+                <p class="text-gray-500 select-none">暂无历史记录</p>
+            </div>
+            <p id="command-feedback" class="text-xs mt-2 h-4 text-center"></p>
+        </footer>
+    </div>
+    <button id="clear-screen-btn" title="网页清屏" class="fixed bottom-6 right-6 z-50 bg-gray-600 hover:bg-gray-700 text-white text-2xl w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-transform transform hover:scale-110">
+        🧹
+    </button>
+<script>
+    // --- MQTT 配置 ---
+    const MQTT_BROKER_HOST = 'broker.emqx.io';
+    const MQTT_BROKER_PORT = 8084; // WebSocket Secure 端口
+    const MQTT_STATUS_TOPIC = 'k230/ai/status_feed';
+    const MQTT_COMMAND_TOPIC = 'k230/ai/command';
+    const MQTT_CLIENT_ID = 'web_monitor_ctrl_' + Math.random().toString(16).substr(2, 8);
+
+    // --- UI元素 ---
+    const connectionStatusElem = document.getElementById('connection-status');
+    const statusCardElem = document.getElementById('status-card');
+    const currentStatusTextElem = document.getElementById('current-status-text');
+    const lastUpdateElem = document.getElementById('last-update');
+    const messageLogElem = document.getElementById('message-log');
+    const dispatchBtn = document.getElementById('dispatch-btn');
+    const commandFeedbackElem = document.getElementById('command-feedback');
+    const clearScreenBtn = document.getElementById('clear-screen-btn');
+    const locationSwitchBtn = document.getElementById('location-switch-btn');
+    const modeSwitchBtn = document.getElementById('mode-switch-btn');
+    const deviceModeStatusElem = document.getElementById('device-mode-status').querySelector('span');
+    const faceLogListElem = document.getElementById('face-log-list');
+    const faceUpdateElem = document.getElementById('face-update');
+    /* ✍️ 在这里添加下面的代码 */
+    const tempValueElem = document.getElementById('temp-value');
+    const humiValueElem = document.getElementById('humi-value');
+    const sensorUpdateElem = document.getElementById('sensor-update');
+
+    /* --- 新增: 录音记录UI元素 --- */
+    const recordLogListElem = document.getElementById('record-log-list');
+    const recordUpdateElem = document.getElementById('record-update');
+
+
+    // --- 状态变量 ---
+    const locations = [{ name: '地点一', value: 1 }, { name: '地点二', value: 2 }, { name: '地点三', value: 3 }];
+    let currentLocationIndex = 0;
+    let statusResetTimeout = null;
+    let isRegisterMode = false;
+
+    /* ✍️ 新增: 定义高温警报阈值 (单位: °C) */
+    const TEMP_HIGH_THRESHOLD = 40.0;
+
+    // --- 状态码映射表 ---
+    const STATUS_MAP = {
+                /* ✍️ 新增: 自动出动指令状态码 */
+        '0x01': { text: "自动指令: 出动小车(地点一)", color: "bg-cyan-700", icon: '🤖' },
+        '0x02': { text: "自动指令: 出动小车(地点二)", color: "bg-cyan-700", icon: '🤖' },
+        '0x03': { text: "自动指令: 出动小车(地点三)", color: "bg-cyan-700", icon: '🤖' },
+        '0x10': { text: "一切正常", color: "bg-green-700", icon: '✅' },
+        '0x11': { text: "检测到有人", color: "bg-blue-600", icon: '👀' },
+        '0x12': { text: "检测到跌倒", color: "bg-red-700", icon: '🤸' },
+        '0x13': { text: "检测到吸烟", color: "bg-orange-600", icon: '🚬' },
+        '0x14': { text: "检测到香烟或打火机", color: "bg-orange-400", icon: '🚬🔥' },
+        '0x21': { text: "识别到授权人员", color: "bg-purple-600", icon: '👤' },
+        '0x22': { text: "检测到未授权人员", color: "bg-yellow-600", icon: '⚠️' },
+        '0xa0': { text: "远程指令：出动小车", color: "bg-indigo-700", icon: '🚀' },
+        /* ✍️ 在这里添加下面的三行代码 */
+        '0x31': { text: "确认：小车已出动前往地点一", color: "bg-teal-600", icon: '✅' },
+        '0x32': { text: "确认：小车已出动前往地点二", color: "bg-teal-600", icon: '✅' },
+        '0x33': { text: "确认：小车已出动前往地点三", color: "bg-teal-600", icon: '✅' },
+
+        /* ✍️ 新增: 为前端定义一个高温警报的专属状态码 */
+        '0xFE01': { text: "高温警报！", color: "bg-red-800", icon: '🔥' },
+    };
+
+    // --- MQTT 客户端初始化 ---
+    const client = new Paho.Client(MQTT_BROKER_HOST, MQTT_BROKER_PORT, '/mqtt', MQTT_CLIENT_ID);
+    client.onConnectionLost = onConnectionLost;
+    client.onMessageArrived = onMessageArrived;
+
+    function onConnect() {
+        console.log("成功连接到 MQTT Broker!");
+        connectionStatusElem.textContent = "已连接到服务器";
+        connectionStatusElem.className = "mt-1 text-sm text-green-400";
+        client.subscribe(MQTT_STATUS_TOPIC);
+        console.log("已订阅主题:", MQTT_STATUS_TOPIC);
+    }
+
+    function onConnectionLost(responseObject) {
+        console.log("MQTT 连接丢失: ", responseObject.errorMessage);
+        connectionStatusElem.textContent = "连接丢失，正在尝试重连...";
+        connectionStatusElem.className = "mt-1 text-sm text-red-400";
+    }
+
+    function onFailure(error) {
+        console.error("MQTT 连接失败: ", error);
+        connectionStatusElem.textContent = "连接失败，请检查网络";
+        connectionStatusElem.className = "mt-1 text-sm text-red-400";
+    }
+
+    /**
+     * 🆕 核心函数重构：根据事件类型，将日志分发到不同的UI区域
+     */
+    function onMessageArrived(message) {
+
+        // 检查是否为单字节的二进制录音消息
+        if (message.payloadBytes.length === 1) {
+            const recordingIndex = message.payloadBytes[0];
+            console.log(`收到二进制录音消息, 索引: ${recordingIndex}`);
+            addRecordingLogEntry(recordingIndex);
+            return; // 录音消息处理完毕，退出函数
+        }
+
+        try {
+            const data = JSON.parse(message.payloadString);
+            console.log("收到JSON消息:", data);
+           
+           
+            // 优先检查是否为温湿度传感器数据
+            if (data.hasOwnProperty('temperature') && data.hasOwnProperty('humidity')) {
+                updateSensorCard(data);
+                // 传感器数据处理完毕，直接返回，不执行后续的AI事件逻辑
+                return;
+            }
+
+
+            // 1. 任何事件都先更新主状态卡
+            updateStatusCard(data);
+
+            const statusCode = data.status_code;
+
+            // 2. 根据状态码决定日志记录的位置
+            if (statusCode === '0x21') {
+                // 授权人员 -> 记录到“出入人员记录”
+                addAccessLogEntry(data.user_name, true);
+            } else if (statusCode === '0x22') {
+                // 未授权人员 -> 记录到“出入人员记录”
+                addAccessLogEntry('未授权人员', false);
+            } else if (data.event_type === 'mode_change') {
+                // 模式切换事件，只处理UI，不记录到日志
+                handleModeChange(data.mode);
+            } else {
+                // 其他所有事件 -> 记录到“历史事件日志”
+                addLogEntry(data);
+            }
+        } catch (e) {
+            console.error(`无法解析消息: `, e, `原始消息: ${message.payloadString}`);
+        }
+    }
+    
+    /* --- 新增: 处理录音记录的函数 --- */
+    function addRecordingLogEntry(index) {
+        const placeholder = recordLogListElem.querySelector('.log-empty');
+        if (placeholder) {
+            recordLogListElem.innerHTML = '';
+        }
+
+        const logItem = document.createElement('div');
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        let logText;
+        let icon;
+
+        // 根据K230端代码定义的二进制码进行翻译
+        if (index === 0) {
+            logText = "录音失败";
+            icon = '❌';
+        } else if (index === 254) { // 0xFE
+            logText = "留言索引过大";
+            icon = '⚠️';
+        } else if (index === 255) { // 0xFF
+            logText = "无法识别的留言";
+            icon = '❓';
+        } else {
+            logText = `留言 ${index} 已保存`;
+            icon = '🎤';
+        }
+
+        logItem.className = 'flex justify-between items-center p-1 bg-white/10 rounded';
+        logItem.innerHTML = `
+            <span>
+                <span class="inline-block w-5 text-center">${icon}</span>
+                ${logText}
+            </span>
+            <span class="text-gray-400">${timestamp}</span>
+        `;
+
+        recordLogListElem.prepend(logItem);
+
+        while (recordLogListElem.children.length > 5) {
+            recordLogListElem.lastElementChild.remove();
+        }
+
+        recordUpdateElem.textContent = `最后更新: ${timestamp}`;
+    }
+
+    /* ✍️ 修改: 重构此函数以集成温度检查和警报逻辑 */
+    /**
+     * 更新环境温湿度卡片，并检查温度是否异常
+     */
+    function updateSensorCard(data) {
+        const temp = data.temperature !== undefined ? parseFloat(data.temperature) : null;
+        const humi = data.humidity !== undefined ? data.humidity : null;
+        
+        // 1. 更新UI上的文本数值
+        if (temp !== null) {
+            tempValueElem.textContent = temp.toFixed(1); // 保留一位小数
+        }
+        if (humi !== null) {
+            humiValueElem.textContent = humi;
+        }
+        sensorUpdateElem.textContent = `最后更新: ${new Date().toLocaleTimeString()}`;
+
+        // 2. 检查温度是否超过阈值
+        const sensorCardElem = document.querySelector('.sensor-card'); // 获取温湿度卡片元素
+        if (temp !== null && temp >= TEMP_HIGH_THRESHOLD) {
+            // --- 温度过高，触发警报 ---
+            // a) 将温湿度卡片变为警示性的红橙色渐变
+            sensorCardElem.classList.remove('from-blue-500', 'to-green-500');
+            sensorCardElem.classList.add('from-red-600', 'to-orange-600');
+            
+            // b) 更新主状态卡，显示高温警报
+            //    我们复用 updateStatusCard 函数，并传入虚拟状态码和详细温度
+            const alertData = {
+                status_code: '0xFE01',
+                user_name: `当前温度: ${temp.toFixed(1)}°C` // 使用 user_name 字段传递详细信息
+            };
+            updateStatusCard(alertData);
+            
+            // c) 在历史事件日志中添加一条记录
+            addLogEntry({ status_code: '0xFE01' });
+
+        } else {
+            // --- 温度正常，恢复卡片默认样式 ---
+            sensorCardElem.classList.add('from-blue-500', 'to-green-500');
+            sensorCardElem.classList.remove('from-red-600', 'to-orange-600');
+        }
+    }
+    function updateStatusCard(data) {
+        if (!data.status_code) return;
+        if (statusResetTimeout) {
+            clearTimeout(statusResetTimeout);
+            statusResetTimeout = null;
+        }
+
+        const statusCode = data.status_code;
+        const statusInfo = STATUS_MAP[statusCode];
+
+        if (statusInfo) {
+            let statusText = statusInfo.text;
+            if (statusCode === '0x21' && data.user_name) {
+                statusText += `: ${data.user_name}`;
+            }
+            currentStatusTextElem.textContent = statusText;
+            statusCardElem.className = `status-card rounded-xl shadow-xl p-4 mb-10 text-sm flex flex-col justify-center items-center h-36 ${statusInfo.color}`;
+        } else {
+            currentStatusTextElem.textContent = `未知状态 (${statusCode})`;
+            statusCardElem.className = "status-card bg-gray-800 rounded-xl shadow-xl p-4 mb-10 text-sm flex flex-col justify-center items-center h-36";
+        }
+        lastUpdateElem.textContent = `最后更新: ${new Date().toLocaleTimeString()}`;
+    }
+
+    /**
+     * 将非人脸识别事件添加到“历史事件日志”
+     */
+    function addLogEntry(data) {
+        const statusCode = data.status_code;
+        if (!STATUS_MAP[statusCode]) return;
+        
+        const placeholder = messageLogElem.querySelector('p');
+        if (placeholder) messageLogElem.innerHTML = '';
+        
+        const statusInfo = STATUS_MAP[statusCode];
+        const logText = statusInfo.text;
+        const icon = statusInfo.icon || '🔔';
+        const timestamp = new Date().toLocaleTimeString();
+        const logItem = document.createElement('div');
+        const logColor = statusInfo.color ? statusInfo.color.replace('bg-', 'bg-opacity-30 bg-') : 'bg-gray-700';
+        
+        logItem.className = `${logColor} p-2 rounded-lg flex justify-between items-center`;
+        logItem.innerHTML = `<span><span class="inline-block text-center w-6">${icon}</span>${logText}</span><span class="text-gray-400">${timestamp}</span>`;
+        
+        messageLogElem.prepend(logItem);
+        while (messageLogElem.children.length > 20) {
+            messageLogElem.lastElementChild.remove();
+        }
+    }
+
+    /**
+     * 🆕 新增函数：处理所有出入记录（授权和未授权），更新“出入人员记录”卡片
+     * @param {string} name - 人员名称或"未授权人员"
+     * @param {boolean} isAuthorized - true代表授权, false代表未授权
+     */
+    function addAccessLogEntry(name, isAuthorized) {
+        const placeholder = faceLogListElem.querySelector('.log-empty');
+        if (placeholder) {
+            faceLogListElem.innerHTML = '';
+        }
+        
+        const logItem = document.createElement('div');
+        const nameColor = isAuthorized ? 'text-cyan-300' : 'text-red-400';
+        const icon = isAuthorized ? '✔️' : '❌';
+        logItem.className = 'flex justify-between items-center p-1 bg-white/10 rounded';
+        
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        
+        logItem.innerHTML = `
+            <span class="font-semibold ${nameColor}">
+                <span class="inline-block w-5 text-center">${icon}</span>
+                ${name}
+            </span>
+            <span class="text-gray-400">${timestamp}</span>
+        `;
+        
+        faceLogListElem.prepend(logItem);
+        
+        while (faceLogListElem.children.length > 5) {
+            faceLogListElem.lastElementChild.remove();
+        }
+        
+        faceUpdateElem.textContent = `最后更新: ${timestamp}`;
+    }
+
+    function handleModeChange(mode) {
+        console.log(`收到设备模式变更确认: ${mode}`);
+        if (mode === 'registration') {
+            isRegisterMode = true;
+            deviceModeStatusElem.textContent = '注册模式';
+            modeSwitchBtn.textContent = '返回访客模式';
+            showFeedback('设备已进入注册模式', false);
+        } else { // visitor
+            isRegisterMode = false;
+            deviceModeStatusElem.textContent = '访客模式';
+            modeSwitchBtn.textContent = '进入注册模式';
+            showFeedback('设备已返回访客模式', false);
+        }
+    }
+
+    function toggleDeviceMode() {
+        if (!client.isConnected()) {
+            showFeedback("错误：未连接到服务器", true);
+            return;
+        }
+        const command = isRegisterMode ? 'exit_registration_mode' : 'enter_registration_mode';
+        const payload = { command: command };
+        const message = new Paho.Message(JSON.stringify(payload));
+        message.destinationName = MQTT_COMMAND_TOPIC;
+        client.send(message);
+        showFeedback('模式切换指令已发送，等待设备确认...', false);
+    }
+
+    function showFeedback(text, isError) {
+        commandFeedbackElem.textContent = text;
+        commandFeedbackElem.className = isError ? 'text-center text-xs mt-2 h-4 text-red-400' : 'text-center text-xs mt-2 h-4 text-green-400';
+        if (!isError) {
+            setTimeout(() => { commandFeedbackElem.textContent = ''; }, 4000);
+        }
+    }
+
+    function resetUI() {
+        currentStatusTextElem.textContent = "- 等待数据 -";
+        lastUpdateElem.textContent = "最后更新: N/A";
+        statusCardElem.className = "status-card bg-gray-800 rounded-xl shadow-xl p-4 mb-10 text-sm flex flex-col justify-center items-center h-36";
+        messageLogElem.innerHTML = '<p class="text-gray-500 select-none">暂无历史记录</p>';
+        faceLogListElem.innerHTML = '<div class="log-empty text-gray-300 select-none">暂无记录</div>';
+        faceUpdateElem.textContent = "最后更新: N/A";
+        commandFeedbackElem.textContent = '';
+        tempValueElem.textContent = '--';
+        humiValueElem.textContent = '--';
+        sensorUpdateElem.textContent = "最后更新: N/A";
+        recordLogListElem.innerHTML = '<div class="log-empty text-gray-300 select-none">暂无记录</div>';
+        recordUpdateElem.textContent = "最后更新: N/A";
+        /* ✍️ 新增: 确保温湿度卡片的背景颜色也被重置 */
+        const sensorCardElem = document.querySelector('.sensor-card');
+        sensorCardElem.className = 'sensor-card flex-1 bg-gradient-to-br from-blue-500 to-green-500 rounded-xl p-3 flex flex-col justify-center items-center h-36 text-sm';
+
+        console.log("网页UI已恢复到初始状态。");
+    }
+
+    function sendDispatchCommand() {
+        if (!client.isConnected()) {
+            showFeedback("错误：未连接到服务器", true);
+            return;
+        }
+        const selectedLocation = locations[currentLocationIndex];
+        const payload = { command: 'dispatch_vehicle', location: selectedLocation.value };
+        const message = new Paho.Message(JSON.stringify(payload));
+        message.destinationName = MQTT_COMMAND_TOPIC;
+        client.send(message);
+        showFeedback(`“出动小车”指令已发送 (目标: ${selectedLocation.name})！`, false);
+        addLogEntry({status_code: '0xa0'});
+    }
+
+
+    /**
+     * ✍️ BUG修复：修改此函数
+     * 切换地点时，不仅更新UI，还要向K230发送'set_location'指令，
+     * 以同步设备的默认出动地点。
+     */
+    function switchLocation() {
+        // 1. 循环更新网页本地的地点索引
+        currentLocationIndex = (currentLocationIndex + 1) % locations.length;
+        const newLocation = locations[currentLocationIndex];
+        
+        // 2. 更新按钮的文本，提供即时UI反馈
+        locationSwitchBtn.textContent = newLocation.name;
+        showFeedback(`自动出动地点已切换为: ${newLocation.name}`, false);
+
+        // 3. 检查MQTT连接
+        if (!client.isConnected()) {
+            showFeedback("错误：未连接，无法同步地点到设备", true);
+            return; // 如果未连接，则不执行发送操作
+        }
+
+        // 4. 发送 'set_location' 指令到 K230
+        const payload = { command: 'set_location', location: newLocation.value };
+        const message = new Paho.Message(JSON.stringify(payload));
+        message.destinationName = MQTT_COMMAND_TOPIC;
+        client.send(message);
+        
+        console.log(`已发送 'set_location' 指令到设备, 目标: ${newLocation.name} (${newLocation.value})`);
+    }
+
+    // --- 事件监听器绑定 ---
+    dispatchBtn.addEventListener('click', sendDispatchCommand);
+    clearScreenBtn.addEventListener('click', resetUI);
+    locationSwitchBtn.addEventListener('click', switchLocation);
+    modeSwitchBtn.addEventListener('click', toggleDeviceMode);
+
+    // --- 连接到 MQTT 服务器 ---
+    client.connect({ onSuccess: onConnect, onFailure: onFailure, useSSL: true, cleanSession: true });
+</script>
+
+</body>
+</html>
